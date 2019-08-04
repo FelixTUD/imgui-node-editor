@@ -83,9 +83,10 @@ struct Pin
     std::string Name;
     PinType     Type;
     PinKind     Kind;
+	int			ConnectionCount;
 
     Pin(int id, const char* name, PinType type):
-        ID(id), Node(nullptr), Name(name), Type(type), Kind(PinKind::Input)
+        ID(id), Node(nullptr), Name(name), Type(type), Kind(PinKind::Input), ConnectionCount(0)
     {
     }
 };
@@ -235,7 +236,9 @@ static bool IsPinLinked(ed::PinId id)
 
 static bool CanCreateLink(Pin* a, Pin* b)
 {
-    if (!a || !b || a == b || a->Kind == b->Kind || a->Type != b->Type || a->Node == b->Node)
+    if (!a || !b || a == b || a->Kind == b->Kind || a->Type != b->Type || a->Node == b->Node 
+		|| (a->Kind == PinKind::Output && a->Type == PinType::Flow && a->ConnectionCount > 0)
+		|| (b->Kind == PinKind::Output && b->Type == PinType::Flow && b->ConnectionCount > 0))
         return false;
 
     return true;
@@ -1275,21 +1278,28 @@ void Application_Frame()
                             showLabel("x Incompatible Pin Kind", ImColor(45, 32, 32, 180));
                             ed::RejectNewItem(ImColor(255, 0, 0), 2.0f);
                         }
-                        //else if (endPin->Node == startPin->Node)
-                        //{
-                        //    showLabel("x Cannot connect to self", ImColor(45, 32, 32, 180));
-                        //    ed::RejectNewItem(ImColor(255, 0, 0), 1.0f);
-                        //}
+                        else if (endPin->Node == startPin->Node)
+                        {
+                            showLabel("x Cannot connect to self", ImColor(45, 32, 32, 180));
+							ed::RejectNewItem(ImColor(255, 0, 0), 1.0f);
+                        }
                         else if (endPin->Type != startPin->Type)
                         {
                             showLabel("x Incompatible Pin Type", ImColor(45, 32, 32, 180));
                             ed::RejectNewItem(ImColor(255, 128, 128), 1.0f);
                         }
+						else if (startPin->Kind == PinKind::Output && startPin->Type == PinType::Flow && startPin->ConnectionCount > 0)
+						{
+							showLabel("x Flow Pin can't have more than one outgoing connection", ImColor(45, 32, 32, 180));
+							ed::RejectNewItem(ImColor(255, 128, 128), 1.0f);
+						}
                         else
                         {
                             showLabel("+ Create Link", ImColor(32, 45, 32, 180));
                             if (ed::AcceptNewItem(ImColor(128, 255, 128), 4.0f))
                             {
+								startPin->ConnectionCount++;
+								endPin->ConnectionCount++;
                                 s_Links.emplace_back(Link(GetNextId(), startPinId, endPinId));
                                 s_Links.back().Color = GetIconColor(startPin->Type);
                             }
@@ -1328,8 +1338,12 @@ void Application_Frame()
                     if (ed::AcceptDeletedItem())
                     {
                         auto id = std::find_if(s_Links.begin(), s_Links.end(), [linkId](auto& link) { return link.ID == linkId; });
-                        if (id != s_Links.end())
-                            s_Links.erase(id);
+						if (id != s_Links.end())
+						{
+							FindPin(id->StartPinID)->ConnectionCount--;
+							FindPin(id->EndPinID)->ConnectionCount--;
+							s_Links.erase(id);
+						}
                     }
                 }
 
@@ -1402,6 +1416,8 @@ void Application_Frame()
                 ImGui::Text("Node: %p", pin->Node->ID.AsPointer());
             else
                 ImGui::Text("Node: %s", "<none>");
+
+			ImGui::Text("Connection Count %d", pin->ConnectionCount);
         }
         else
             ImGui::Text("Unknown pin: %p", contextPinId.AsPointer());
@@ -1487,6 +1503,9 @@ void Application_Frame()
                         auto endPin = &pin;
                         if (startPin->Kind == PinKind::Input)
                             std::swap(startPin, endPin);
+
+						startPin->ConnectionCount++;
+						endPin->ConnectionCount++;
 
                         s_Links.emplace_back(Link(GetNextId(), startPin->ID, endPin->ID));
                         s_Links.back().Color = GetIconColor(startPin->Type);
